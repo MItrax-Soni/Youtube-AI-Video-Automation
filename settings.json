@@ -1,0 +1,9 @@
+{
+    "default_duration": 60,
+    "default_tone": "educational",
+    "default_voice": "gTTS (Standard)",
+    "default_style": "Documentary",
+    "output_folder": "D:\\Projects\\YT\\output",
+    "enable_n8n": true,
+    "enable_transition_effects": true
+}

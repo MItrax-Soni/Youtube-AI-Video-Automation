@@ -1,0 +1,166 @@
+{
+  "name": "YouTube Automation Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "youtube-automation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "youtube-automation"
+    },
+    {
+      "parameters": {
+        "command": "=cd {{$json[\"project_path\"]}} && python -m scripts.script_generator --topic \"{{$json[\"topic\"]}}\" --tone {{$json[\"tone\"]}} --duration {{$json[\"duration\"]}}"
+      },
+      "id": "generate-script",
+      "name": "Generate Script",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [480, 300],
+      "notesInFlow": true,
+      "notes": "Calls script_generator.py to create a structured video script using Gemini AI"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the script JSON from the command output\nconst output = $input.first().json.stdout;\nconst script = JSON.parse(output);\n\n// Save script to file for subsequent steps\nconst fs = require('fs');\nconst projectPath = $('Webhook Trigger').first().json.body.project_path;\nconst scriptPath = projectPath + '/assets/script.json';\nfs.writeFileSync(scriptPath, JSON.stringify(script, null, 2));\n\nreturn [{ json: { ...script, script_path: scriptPath, project_path: projectPath } }];"
+      },
+      "id": "parse-script",
+      "name": "Parse Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300],
+      "notesInFlow": true,
+      "notes": "Parses script JSON output and saves to file"
+    },
+    {
+      "parameters": {
+        "command": "=cd {{$json[\"project_path\"]}} && python -m scripts.voice_generator --script-file \"{{$json[\"script_path\"]}}\""
+      },
+      "id": "generate-voice",
+      "name": "Generate Voice",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [920, 300],
+      "notesInFlow": true,
+      "notes": "Calls voice_generator.py to create audio narration for each scene"
+    },
+    {
+      "parameters": {
+        "command": "=cd {{$json[\"project_path\"]}} && python -m scripts.visual_generator --script-file assets/script.json"
+      },
+      "id": "collect-visuals",
+      "name": "Collect Visuals",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1140, 300],
+      "notesInFlow": true,
+      "notes": "Calls visual_generator.py to collect/generate images for each scene"
+    },
+    {
+      "parameters": {
+        "command": "=cd {{$json[\"project_path\"]}} && python -m scripts.video_generator --audio-dir assets --image-dir assets"
+      },
+      "id": "assemble-video",
+      "name": "Assemble Video",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1360, 300],
+      "notesInFlow": true,
+      "notes": "Calls video_generator.py to combine audio + images into final video using FFmpeg"
+    },
+    {
+      "parameters": {
+        "command": "=cd {{$json[\"project_path\"]}} && python -m scripts.metadata_generator --topic \"{{$('Webhook Trigger').first().json.body.topic}}\" --script-file assets/script.json"
+      },
+      "id": "generate-metadata",
+      "name": "Generate Metadata",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1580, 300],
+      "notesInFlow": true,
+      "notes": "Calls metadata_generator.py to generate title, description, tags"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine results from all steps\nconst metadataOutput = $input.first().json.stdout;\nconst metadata = JSON.parse(metadataOutput);\n\nreturn [{\n  json: {\n    status: 'success',\n    metadata: metadata,\n    message: 'Video generation pipeline completed successfully'\n  }\n}];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 300],
+      "notesInFlow": true,
+      "notes": "Formats the final response to send back to Streamlit"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2020, 300],
+      "notesInFlow": true,
+      "notes": "Sends the result back to Streamlit"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [{ "node": "Generate Script", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate Script": {
+      "main": [
+        [{ "node": "Parse Script", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Script": {
+      "main": [
+        [{ "node": "Generate Voice", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate Voice": {
+      "main": [
+        [{ "node": "Collect Visuals", "type": "main", "index": 0 }]
+      ]
+    },
+    "Collect Visuals": {
+      "main": [
+        [{ "node": "Assemble Video", "type": "main", "index": 0 }]
+      ]
+    },
+    "Assemble Video": {
+      "main": [
+        [{ "node": "Generate Metadata", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate Metadata": {
+      "main": [
+        [{ "node": "Format Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [{ "node": "Webhook Response", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0
+}
