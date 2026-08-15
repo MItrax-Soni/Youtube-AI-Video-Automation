@@ -42,7 +42,7 @@ def check_gemini() -> dict:
 
         client = genai.Client(api_key=api_key)
         client.models.count_tokens(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents="test",
         )
         return {"status": STATUS_CONNECTED, "message": "Connected"}

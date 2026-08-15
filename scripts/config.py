@@ -16,14 +16,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 # ---------------------------------------------------------------------------
-# Directory Paths
+# Cloud Environment Detection
 # ---------------------------------------------------------------------------
-ASSETS_DIR = PROJECT_ROOT / "assets"
-OUTPUT_DIR = PROJECT_ROOT / "output"
+IS_CLOUD = bool(os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("STREAMLIT_CLOUD"))
+
+# ---------------------------------------------------------------------------
+# Directory Paths
+# On Streamlit Cloud the project directory is read-only; use /tmp/ instead.
+# ---------------------------------------------------------------------------
+if IS_CLOUD:
+    ASSETS_DIR = Path("/tmp/maix_assets")
+    OUTPUT_DIR = Path("/tmp/maix_output")
+else:
+    ASSETS_DIR = PROJECT_ROOT / "assets"
+    OUTPUT_DIR = PROJECT_ROOT / "output"
 
 # Ensure directories exist
-ASSETS_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # API Keys
@@ -104,24 +114,178 @@ def get_pixabay_api_key() -> str:
     return key
 
 
+def get_clerk_publishable_key() -> str:
+    """Return the Clerk publishable key from environment variables."""
+    return os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "")
+
+
+def get_clerk_secret_key() -> str:
+    """Return the Clerk secret key from environment variables."""
+    return os.getenv("CLERK_SECRET_KEY", "")
+
+
+
 # ---------------------------------------------------------------------------
-# Duration-to-Scene-Count Mapping
+# Duration Presets & Word-Count Enforcement
 # ---------------------------------------------------------------------------
+DURATION_PRESETS = {
+    "min": {
+        "key": "min",
+        "label": "Min (Shorts / 30s)",
+        "seconds": 30,
+        "scenes": 5,
+        "min_words": 60,
+        "max_words": 75,
+    },
+    "medium": {
+        "key": "medium",
+        "label": "Medium (Standard / 60s)",
+        "seconds": 60,
+        "scenes": 10,
+        "min_words": 125,
+        "max_words": 150,
+    },
+    "max": {
+        "key": "max",
+        "label": "Max (Extended / 180s)",
+        "seconds": 180,
+        "scenes": 20,
+        "min_words": 375,
+        "max_words": 430,
+    },
+}
+
 DURATION_TO_SCENE_COUNT = [
-    (15,   5),    # up to 15s  -> 5 scenes
-    (30,  10),    # up to 30s  -> 10 scenes
-    (60,  15),    # up to 60s  -> 15 scenes
-    (120, 20),    # up to 120s -> 20 scenes
-    (180, 30),    # up to 180s -> 30 scenes
+    (30,  5),     # Min: 30s -> 5 scenes
+    (60,  10),    # Medium: 60s -> 10 scenes
+    (180, 20),    # Max: 180s -> 20 scenes
 ]
+
+
+def get_duration_preset(key_or_seconds) -> dict:
+    """Return preset info by key ('min', 'medium', 'max') or nearest duration seconds."""
+    if isinstance(key_or_seconds, str):
+        key = key_or_seconds.lower().strip()
+        if key in DURATION_PRESETS:
+            return DURATION_PRESETS[key]
+        if "min" in key or "30" in key:
+            return DURATION_PRESETS["min"]
+        if "max" in key or "180" in key:
+            return DURATION_PRESETS["max"]
+        return DURATION_PRESETS["medium"]
+
+    sec = int(key_or_seconds)
+    if sec <= 40:
+        return DURATION_PRESETS["min"]
+    elif sec >= 120:
+        return DURATION_PRESETS["max"]
+    else:
+        return DURATION_PRESETS["medium"]
 
 
 def get_scene_count(duration_seconds: int) -> int:
     """Return the number of scenes/visuals to generate for a given video duration."""
-    for max_dur, count in DURATION_TO_SCENE_COUNT:
-        if duration_seconds <= max_dur:
-            return count
-    return DURATION_TO_SCENE_COUNT[-1][1]
+    return get_duration_preset(duration_seconds)["scenes"]
+
+
+def get_duration_word_bounds(duration_seconds: int) -> tuple[int, int]:
+    """Return (min_words, max_words) for a target video duration based on ~2.3 words/sec."""
+    preset = get_duration_preset(duration_seconds)
+    return preset["min_words"], preset["max_words"]
+
+
+# ---------------------------------------------------------------------------
+# Style-Based Video Effect Profiles
+# ---------------------------------------------------------------------------
+STYLE_EFFECT_PROFILES = {
+    "Documentary": {
+        "transition_type": "dissolve",
+        "transition_duration": 0.6,
+        "zoom_speed": 0.0012,
+        "max_zoom": 1.12,
+        "motion_types": ["zoom_in", "zoom_out"],
+        "text_style": "subtle_lower_third",
+    },
+    "Educational Explainer": {
+        "transition_type": "fade",
+        "transition_duration": 0.5,
+        "zoom_speed": 0.0015,
+        "max_zoom": 1.15,
+        "motion_types": ["zoom_in", "pan_right", "pan_left"],
+        "text_style": "clean_keyword_box",
+    },
+    "Storytelling": {
+        "transition_type": "dissolve",
+        "transition_duration": 0.8,
+        "zoom_speed": 0.0010,
+        "max_zoom": 1.10,
+        "motion_types": ["zoom_in", "zoom_out"],
+        "text_style": "subtle_lower_third",
+    },
+    "News": {
+        "transition_type": "fade",
+        "transition_duration": 0.3,
+        "zoom_speed": 0.0008,
+        "max_zoom": 1.06,
+        "motion_types": ["zoom_in"],
+        "text_style": "clean_keyword_box",
+    },
+    "Cinematic": {
+        "transition_type": "dissolve",
+        "transition_duration": 1.0,
+        "zoom_speed": 0.0020,
+        "max_zoom": 1.20,
+        "motion_types": ["zoom_in", "zoom_out", "pan_right", "pan_left"],
+        "text_style": "cinematic_center",
+    },
+    "Entertainment": {
+        "transition_type": "fadeblack",
+        "transition_duration": 0.4,
+        "zoom_speed": 0.0020,
+        "max_zoom": 1.18,
+        "motion_types": ["zoom_in", "zoom_out", "pan_left", "pan_right"],
+        "text_style": "bold_pop",
+    },
+    "Listicle": {
+        "transition_type": "fade",
+        "transition_duration": 0.35,
+        "zoom_speed": 0.0016,
+        "max_zoom": 1.14,
+        "motion_types": ["zoom_in", "pan_right"],
+        "text_style": "clean_keyword_box",
+    },
+    "Case Study": {
+        "transition_type": "dissolve",
+        "transition_duration": 0.7,
+        "zoom_speed": 0.0012,
+        "max_zoom": 1.10,
+        "motion_types": ["zoom_in", "zoom_out"],
+        "text_style": "subtle_lower_third",
+    },
+    # Legacy key for backward compat
+    "Educational": {
+        "transition_type": "fade",
+        "transition_duration": 0.5,
+        "zoom_speed": 0.0015,
+        "max_zoom": 1.15,
+        "motion_types": ["zoom_in", "pan_right", "pan_left"],
+        "text_style": "clean_keyword_box",
+    },
+    "Motivational": {
+        "transition_type": "fade",
+        "transition_duration": 0.6,
+        "zoom_speed": 0.0018,
+        "max_zoom": 1.16,
+        "motion_types": ["zoom_in", "zoom_out"],
+        "text_style": "cinematic_center",
+    },
+}
+
+
+def get_style_profile(style_name: str) -> dict:
+    """Return style-based effect profile configuration."""
+    clean_key = style_name.strip() if style_name else "Documentary"
+    return STYLE_EFFECT_PROFILES.get(clean_key, STYLE_EFFECT_PROFILES["Documentary"])
 
 
 # ---------------------------------------------------------------------------
@@ -132,14 +296,22 @@ import json
 SETTINGS_FILE = PROJECT_ROOT / "settings.json"
 
 DEFAULT_SETTINGS = {
+    "default_duration_preset": "medium",
     "default_duration": 60,
     "default_tone": "educational",
-    "default_voice": "gTTS (Standard)",
+    "default_voice": "Edge-TTS (Neural)",
+    "default_voice_gender": "female",
     "default_style": "Documentary",
     "output_folder": str(OUTPUT_DIR),
     "enable_n8n": False,
     "enable_transition_effects": True,
+    "enable_motion_effects": True,
+    "enable_text_highlights": True,
+    "enable_subtitles": False,
+    "enable_bg_music": True,
+    "bg_music_volume": 0.10,
 }
+
 
 class SettingsManager:
     @staticmethod
@@ -161,6 +333,11 @@ class SettingsManager:
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=4)
+        except OSError:
+            # Cloud deployments have a read-only filesystem — skip silently
+            pass
         except Exception as e:
             print(f"Error saving settings: {e}")
+
+
 

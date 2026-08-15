@@ -27,7 +27,7 @@ import sys
 from google import genai
 from google.genai import types
 
-from scripts.config import get_gemini_api_keys, get_scene_count
+from scripts.config import get_gemini_api_keys, get_scene_count, get_duration_word_bounds
 
 # ---------------------------------------------------------------------------
 # Gemini Prompt Template — Structured YouTube Script
@@ -47,6 +47,28 @@ INPUTS
 Topic: {topic}
 Tone: {tone}
 Target Duration: {duration} seconds
+Target Word Count: {min_words} to {max_words} total narration words
+
+==================================================
+CRITICAL TONE ACCURACY RULE
+==================================================
+
+The requested Tone is: "{tone}". 
+You MUST radically alter your vocabulary, pacing, sentence structure, and emotional delivery to match this Tone EXACTLY. 
+If the tone is "Dramatic", the script must be filled with tension, heavy pauses, and serious implications. 
+If the tone is "Energetic", it must be fast-paced, punchy, and highly enthusiastic. 
+If the tone is "Friendly", it must feel like a warm, casual conversation with a close friend.
+Do NOT default to a generic "YouTube voice". Your entire script's personality must be dictated by the requested Tone.
+
+==================================================
+CRITICAL DURATION ACCURACY RULE
+==================================================
+
+Standard narration speaking pace is ~2.3 words per second.
+To ensure the generated video duration is accurate to {duration} seconds:
+• The total combined word count of all scene narrations MUST be between {min_words} and {max_words} words.
+• Do NOT exceed {max_words} words or drop below {min_words} words.
+• Each scene's duration_seconds must accurately reflect the speaking time of its narration.
 
 ==================================================
 THINK BEFORE WRITING
@@ -160,6 +182,42 @@ Visuals must be:
 • Directly tied to the narration content
 
 ==================================================
+STOCK FOOTAGE SEARCH QUERIES (CRITICAL)
+==================================================
+
+For every scene, you MUST also generate 2–3 stock-footage search queries in the "visual_queries" field.
+
+These are NOT the same as visual_prompt. These are SHORT, LITERAL search queries designed to find relevant stock photos/videos on a stock footage platform like Pexels.
+
+RULES:
+• Queries must describe the REAL-WORLD SUBJECT of the narration — what a viewer should SEE while listening.
+• Do NOT use cinematic terms (close-up, zoom, pan, lighting, shot, camera, b-roll).
+• Do NOT use abstract concepts (AI concept, technology, innovation, future).
+• DO describe concrete, searchable subjects (people, objects, actions, places).
+• Each query should be 3–6 words, specific and literal.
+• Order queries from most specific to broadest fallback.
+• Each scene's queries must be DIFFERENT from every other scene's queries.
+
+EXAMPLE — Good vs Bad:
+
+Narration: "AI agents can automatically analyze thousands of financial documents."
+
+BAD queries: ["AI", "AI technology", "futuristic robot"]
+GOOD queries: ["financial analyst reviewing documents", "business financial reports computer", "document analysis office"]
+
+Narration: "Electric vehicles are becoming cheaper because battery manufacturing is scaling rapidly."
+
+BAD queries: ["electric car", "person driving", "technology"]
+GOOD queries: ["electric vehicle battery factory", "lithium battery manufacturing", "EV assembly line production"]
+
+Narration: "Doctors are using AI to analyze medical scans."
+
+BAD queries: ["AI technology medical", "robot doctor"]
+GOOD queries: ["doctor examining medical scan", "radiology MRI analysis", "medical imaging hospital"]
+
+The search queries must represent the VISUAL MEANING of what the narrator is describing — what should appear on screen.
+
+==================================================
 FACTUAL ACCURACY
 ==================================================
 
@@ -184,6 +242,7 @@ Return ONLY valid JSON. No markdown. No code fences. No explanations. No extra t
       "objective": "what this scene achieves for the viewer",
       "narration": "full narration text for this scene",
       "visual_prompt": "highly specific, cinematically descriptive visual prompt",
+      "visual_queries": ["specific stock footage search query 1", "broader stock footage search query 2", "broadest fallback query 3"],
       "transition": "how this scene flows into the next",
       "duration_seconds": 12
     }}
@@ -194,6 +253,7 @@ The sum of all scene duration_seconds must equal approximately {duration}.
 
 The script must be indistinguishable from one written by a world-class human YouTube creator.
 """
+
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +267,7 @@ MOCK_TEMPLATES = {
             "exactly why."
         ),
         "visual_prompt": "Dramatic wide shot of {topic_keyword} technology in action with cinematic lighting",
+        "visual_queries": ["{topic_keyword} in action", "{topic_keyword} demonstration", "{topic_keyword} overview"],
     },
     "introduction": {
         "narration": (
@@ -215,6 +276,7 @@ MOCK_TEMPLATES = {
             "basics, there's something here for everyone. Let's get started."
         ),
         "visual_prompt": "Modern workspace with {topic_keyword} related content displayed on multiple screens",
+        "visual_queries": ["{topic_keyword} workspace computer", "modern office multiple screens", "professional working desk setup"],
     },
     "main_content": [
         {
@@ -224,6 +286,7 @@ MOCK_TEMPLATES = {
                 "its real impact."
             ),
             "visual_prompt": "Detailed diagram explaining {topic_keyword} fundamentals on a whiteboard",
+            "visual_queries": ["{topic_keyword} explanation whiteboard", "{topic_keyword} fundamentals diagram", "educational presentation concept"],
         },
         {
             "narration": (
@@ -232,6 +295,7 @@ MOCK_TEMPLATES = {
                 "researchers are making breakthroughs every day."
             ),
             "visual_prompt": "Team of researchers working with {topic_keyword} equipment in a modern lab",
+            "visual_queries": ["researchers working laboratory", "{topic_keyword} research team", "scientists modern lab equipment"],
         },
         {
             "narration": (
@@ -239,6 +303,7 @@ MOCK_TEMPLATES = {
                 "compelling story about where things are headed."
             ),
             "visual_prompt": "Data visualization dashboard showing {topic_keyword} growth statistics",
+            "visual_queries": ["data analytics dashboard screen", "growth statistics chart", "business data visualization"],
         },
         {
             "narration": (
@@ -247,6 +312,7 @@ MOCK_TEMPLATES = {
                 "just a few years ago."
             ),
             "visual_prompt": "Futuristic technology demonstration related to {topic_keyword}",
+            "visual_queries": ["{topic_keyword} innovation technology", "modern technology breakthrough", "cutting edge {topic_keyword}"],
         },
         {
             "narration": (
@@ -255,6 +321,7 @@ MOCK_TEMPLATES = {
                 "the hype from reality."
             ),
             "visual_prompt": "Side-by-side comparison showing common myths versus facts about {topic_keyword}",
+            "visual_queries": ["fact check comparison", "myth versus reality", "truth about {topic_keyword}"],
         },
         {
             "narration": (
@@ -262,6 +329,7 @@ MOCK_TEMPLATES = {
                 "the advantages become clear. The evolution has been remarkable."
             ),
             "visual_prompt": "Timeline infographic showing the evolution of {topic_keyword} over the years",
+            "visual_queries": ["{topic_keyword} evolution timeline", "progress comparison old new", "technology advancement history"],
         },
         {
             "narration": (
@@ -270,6 +338,7 @@ MOCK_TEMPLATES = {
                 "us see the complete picture."
             ),
             "visual_prompt": "Professional conference panel discussing {topic_keyword} challenges",
+            "visual_queries": ["professional conference panel discussion", "experts meeting boardroom", "industry leaders debate"],
         },
         {
             "narration": (
@@ -277,6 +346,7 @@ MOCK_TEMPLATES = {
                 "work in a real scenario makes everything click into place."
             ),
             "visual_prompt": "Step-by-step demonstration of {topic_keyword} being used in practice",
+            "visual_queries": ["{topic_keyword} practical demonstration", "hands on {topic_keyword} work", "step by step process"],
         },
         {
             "narration": (
@@ -284,6 +354,7 @@ MOCK_TEMPLATES = {
                 "changing how people think about everyday problems and solutions."
             ),
             "visual_prompt": "Diverse group of people benefiting from {topic_keyword} in daily life",
+            "visual_queries": ["people using {topic_keyword} daily life", "diverse group technology users", "everyday life improvement"],
         },
         {
             "narration": (
@@ -291,6 +362,7 @@ MOCK_TEMPLATES = {
                 "promising. New developments are being announced almost weekly."
             ),
             "visual_prompt": "Futuristic cityscape with {topic_keyword} technology integrated into infrastructure",
+            "visual_queries": ["futuristic city technology", "modern smart city", "future urban infrastructure"],
         },
         {
             "narration": (
@@ -298,6 +370,7 @@ MOCK_TEMPLATES = {
                 "started with {topic}, even if you're a complete beginner."
             ),
             "visual_prompt": "Clean checklist or step-by-step guide for getting started with {topic_keyword}",
+            "visual_queries": ["checklist getting started", "beginner guide tutorial", "step by step instructions notebook"],
         },
         {
             "narration": (
@@ -305,6 +378,7 @@ MOCK_TEMPLATES = {
                 "The trend shows no signs of slowing down."
             ),
             "visual_prompt": "Business leaders and investors discussing {topic_keyword} strategy in a boardroom",
+            "visual_queries": ["business leaders boardroom meeting", "investors strategy discussion", "corporate meeting presentation"],
         },
         {
             "narration": (
@@ -312,6 +386,7 @@ MOCK_TEMPLATES = {
                 "and open sharing of ideas are driving innovation forward."
             ),
             "visual_prompt": "Online community or meetup event focused on {topic_keyword}",
+            "visual_queries": ["community meetup event", "people collaborating together", "team brainstorming ideas"],
         },
         {
             "narration": (
@@ -319,6 +394,7 @@ MOCK_TEMPLATES = {
                 "Having the right tools makes all the difference."
             ),
             "visual_prompt": "Collection of software tools and resources for working with {topic_keyword}",
+            "visual_queries": ["software tools computer screen", "digital tools resources", "professional toolkit workspace"],
         },
         {
             "narration": (
@@ -326,6 +402,7 @@ MOCK_TEMPLATES = {
                 "ability to adapt and evolve rapidly. This flexibility is key."
             ),
             "visual_prompt": "Abstract visualization showing {topic_keyword} adaptability and flexibility",
+            "visual_queries": ["{topic_keyword} flexibility adaptation", "evolving technology process", "agile transformation"],
         },
         {
             "narration": (
@@ -333,6 +410,7 @@ MOCK_TEMPLATES = {
                 "There are courses, tutorials, and communities for every level."
             ),
             "visual_prompt": "Students learning about {topic_keyword} in a modern classroom or online setting",
+            "visual_queries": ["students learning classroom", "online education computer", "person studying tutorial"],
         },
         {
             "narration": (
@@ -340,6 +418,7 @@ MOCK_TEMPLATES = {
                 "discuss. Responsible development benefits everyone."
             ),
             "visual_prompt": "Thoughtful discussion panel about ethics and responsibility in {topic_keyword}",
+            "visual_queries": ["ethics discussion panel", "responsible development team", "thoughtful professional conversation"],
         },
         {
             "narration": (
@@ -347,6 +426,7 @@ MOCK_TEMPLATES = {
                 "involved. Each breakthrough creates new opportunities."
             ),
             "visual_prompt": "Celebration of a successful {topic_keyword} project with a diverse team",
+            "visual_queries": ["team celebrating success", "project achievement celebration", "diverse team accomplishment"],
         },
     ],
     "conclusion": {
@@ -358,6 +438,7 @@ MOCK_TEMPLATES = {
             "are the best ways to stay ahead."
         ),
         "visual_prompt": "Elegant summary graphic with key points about {topic_keyword} highlighted",
+        "visual_queries": ["summary key points presentation", "conclusion recap highlights", "key takeaways screen"],
     },
     "cta": {
         "narration": (
@@ -367,8 +448,10 @@ MOCK_TEMPLATES = {
             "thoughts and I'll see you in the next one."
         ),
         "visual_prompt": "Animated end screen with subscribe button and related video suggestions",
+        "visual_queries": ["subscribe button end screen", "social media engagement", "video outro end card"],
     },
 }
+
 
 
 def _parse_gemini_response(response_text: str) -> dict:
@@ -387,7 +470,7 @@ def _parse_gemini_response(response_text: str) -> dict:
     return json.loads(text)
 
 
-def _generate_with_gemini(topic: str, tone: str, duration: int) -> dict:
+def _generate_with_gemini(topic: str, tone: str, duration: int, language: str = "english") -> dict:
     """
     Call Gemini API to generate a dynamic video script.
 
@@ -405,19 +488,36 @@ def _generate_with_gemini(topic: str, tone: str, duration: int) -> dict:
     import time
 
     api_keys = get_gemini_api_keys()
+    min_w, max_w = get_duration_word_bounds(duration)
 
     prompt = SCRIPT_PROMPT.format(
         topic=topic,
         tone=tone,
         duration=duration,
+        min_words=min_w,
+        max_words=max_w,
     )
+
+    # Add language instruction if not English
+    lang_key = language.lower().strip()
+    if lang_key != "english":
+        lang_map = {"hindi": "Hindi (हिन्दी)", "gujarati": "Gujarati (ગુજરાતી)"}
+        lang_name = lang_map.get(lang_key, language)
+        prompt = (
+            f"IMPORTANT LANGUAGE INSTRUCTION: Write ALL narration text in {lang_name}. "
+            f"The visual_prompt fields should still be in English for Pexels search compatibility. "
+            f"The title and summary should be in {lang_name}. "
+            f"The objective and transition fields can be in English.\n\n"
+            + prompt
+        )
+
 
     # Model fallback chain — newest/most capable first, lighter fallbacks
     # NOTE: gemini-1.5-flash and gemini-1.5-flash-8b are removed from v1beta API
     MODEL_CHAIN = [
-        "gemini-2.5-flash",       # most capable free-tier model
-        "gemini-2.0-flash",       # fast, reliable
-        "gemini-2.0-flash-lite",  # lightest fallback
+        "gemini-2.5-flash",       # primary flash model
+        "gemini-2.5-flash-lite",  # light fallback
+        "gemini-3.6-flash",       # fallback
     ]
 
     last_error = None
@@ -536,6 +636,9 @@ def _generate_mock(topic: str, tone: str, duration: int) -> dict:
     per_scene = max(2, round(duration / scene_count))
     topic_keyword = topic.lower().replace(" ", " ")
 
+    def _format_queries(queries: list[str]) -> list[str]:
+        return [q.format(topic_keyword=topic_keyword) for q in queries]
+
     scenes = []
 
     # Scene 1: Hook
@@ -545,6 +648,7 @@ def _generate_mock(topic: str, tone: str, duration: int) -> dict:
         "scene_type": "hook",
         "narration": hook["narration"].format(topic=topic),
         "visual_prompt": hook["visual_prompt"].format(topic_keyword=topic_keyword),
+        "visual_queries": _format_queries(hook.get("visual_queries", [])),
         "duration_seconds": min(per_scene, 8),
     })
 
@@ -555,6 +659,7 @@ def _generate_mock(topic: str, tone: str, duration: int) -> dict:
         "scene_type": "introduction",
         "narration": intro["narration"].format(topic=topic),
         "visual_prompt": intro["visual_prompt"].format(topic_keyword=topic_keyword),
+        "visual_queries": _format_queries(intro.get("visual_queries", [])),
         "duration_seconds": per_scene,
     })
 
@@ -576,6 +681,7 @@ def _generate_mock(topic: str, tone: str, duration: int) -> dict:
             "scene_type": "main_content",
             "narration": template["narration"].format(topic=topic),
             "visual_prompt": visual,
+            "visual_queries": _format_queries(template.get("visual_queries", [])),
             "duration_seconds": per_scene,
         })
 
@@ -586,6 +692,7 @@ def _generate_mock(topic: str, tone: str, duration: int) -> dict:
         "scene_type": "conclusion",
         "narration": conclusion["narration"].format(topic=topic),
         "visual_prompt": conclusion["visual_prompt"].format(topic_keyword=topic_keyword),
+        "visual_queries": _format_queries(conclusion.get("visual_queries", [])),
         "duration_seconds": per_scene,
     })
 
@@ -596,6 +703,7 @@ def _generate_mock(topic: str, tone: str, duration: int) -> dict:
         "scene_type": "cta",
         "narration": cta["narration"].format(topic=topic),
         "visual_prompt": cta["visual_prompt"].format(topic_keyword=topic_keyword),
+        "visual_queries": _format_queries(cta.get("visual_queries", [])),
         "duration_seconds": min(per_scene, 6),
     })
 
@@ -603,10 +711,12 @@ def _generate_mock(topic: str, tone: str, duration: int) -> dict:
     return {"title": title, "scenes": scenes}
 
 
+
 def generate_script(
     topic: str,
     tone: str = "educational",
     duration: int = 60,
+    language: str = "english",
 ) -> dict:
     """
     Generate a dynamic video script for the given topic using AI.
@@ -619,6 +729,7 @@ def generate_script(
         topic:    The video topic (e.g., "The Fall of the Roman Empire").
         tone:     Tone of the script (educational, entertaining, motivational).
         duration: Target video duration in seconds.
+        language: Language for narration ("english", "hindi", "gujarati").
 
     Returns:
         A dict with keys:
@@ -629,6 +740,7 @@ def generate_script(
           - topic (str):               Original topic
           - tone (str):                Tone used
           - duration (int):            Target duration
+          - language (str):            Language used
           - scenes (list[dict]):       List of scene dicts, each containing:
               - scene_number, narration, visual_prompt, objective,
                 transition, duration_seconds, scene_type
@@ -636,9 +748,9 @@ def generate_script(
     """
     import sys
     try:
-        result = _generate_with_gemini(topic, tone, duration)
+        result = _generate_with_gemini(topic, tone, duration, language=language)
         source = "gemini"
-        print(f"  [OK] Script generated using Gemini API ({len(result['scenes'])} scenes)", file=sys.stderr)
+        print(f"  [OK] Script generated using Gemini API ({len(result['scenes'])} scenes, lang={language})", file=sys.stderr)
     except Exception as e:
         print(f"  [WARN] Gemini API call failed, using mock script: {e}", file=sys.stderr)
         result = _generate_mock(topic, tone, duration)
@@ -648,6 +760,7 @@ def generate_script(
     result["topic"] = topic
     result["tone"] = tone
     result["duration"] = duration
+    result["language"] = language
     result["source"] = source
 
     return result

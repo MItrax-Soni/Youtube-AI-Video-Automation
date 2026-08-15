@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🎬 AI YouTube Automation Platform</h1>
+  <h1>🎬 MAiX-YT Studio</h1>
   <p>An end-to-end, fully automated pipeline that generates YouTube videos — from topic selection and scriptwriting to voiceover, stock footage, and final video assembly.</p>
 
   <img src="https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python" alt="Python Version" />
@@ -73,6 +73,7 @@ Launch the Streamlit dashboard:
 ```bash
 streamlit run app.py
 ```
+This opens the MAiX-YT Studio web interface.
 
 *(Optional) Start n8n for node-based workflows:*
 ```bash

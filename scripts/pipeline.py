@@ -35,6 +35,7 @@ from scripts.voice_generator import generate_voice
 from scripts.visual_generator import collect_visuals
 from scripts.video_generator import assemble_video
 from scripts.metadata_generator import generate_metadata
+from scripts.database import save_generation
 
 
 class _LogCapture:
@@ -45,7 +46,10 @@ class _LogCapture:
         self._buffer = io.StringIO()
 
     def write(self, text):
-        self._real.write(text)
+        try:
+            self._real.write(text)
+        except UnicodeEncodeError:
+            self._real.write(text.encode(self._real.encoding or 'cp1252', errors='replace').decode(self._real.encoding or 'cp1252'))
         self._buffer.write(text)
 
     def flush(self):
@@ -76,12 +80,15 @@ def _save_script_md(script: dict, path: Path):
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-
-
 def run_pipeline(
     topic: str,
     tone: str = "educational",
     duration: int = 60,
+    voice_gender: str = "female",
+    voice_engine: str = "Edge-TTS (Neural)",
+    style: str = "Documentary",
+    language: str = "english",
+    aspect_ratio: str = "16:9",
     progress_callback=None,
 ) -> dict:
     """
@@ -93,19 +100,15 @@ def run_pipeline(
         topic:             The video topic.
         tone:              Script tone ("educational", "entertaining", "motivational").
         duration:          Target video duration in seconds.
+        voice_gender:      Voice gender ("male" or "female").
+        voice_engine:      Voice TTS engine choice.
+        style:             Video visual style ("Documentary", "Educational", "Entertainment", "Motivational").
+        language:          Language for narration.
         progress_callback: Optional callable(step: int, total: int, message: str)
                            for reporting progress to the UI.
 
     Returns:
-        A dict with:
-          - status (str):      "success" or "error"
-          - video_path (str):  Path to the generated video
-          - metadata (dict):   YouTube metadata
-          - script (dict):     Script data
-          - timing (dict):     Time taken per step
-          - step_status (dict): Per-step status ("success" / "error" / "skipped")
-          - project_dir (str): Path to the project folder
-          - error (str):       Error message if status is "error"
+        A dict with generation status and output metadata.
     """
     total_steps = 5
     timing = {}
@@ -144,7 +147,7 @@ def run_pipeline(
         t0 = time.time()
 
         try:
-            script = generate_script(topic, tone, duration)
+            script = generate_script(topic, tone, duration, language)
             timing["script_generation"] = round(time.time() - t0, 2)
             step_status["script_generation"] = "success"
 
@@ -167,11 +170,13 @@ def run_pipeline(
         # ---------------------------------------------------------------
         # Step 2: Generate Voice
         # ---------------------------------------------------------------
-        report(2, "Generating narration audio...")
+        report(2, f"Generating narration audio ({voice_gender.title()} - {voice_engine})...")
         t0 = time.time()
 
         try:
-            audio_files = generate_voice(script, str(run_dir))
+            audio_files = generate_voice(
+                script, str(run_dir), voice_gender=voice_gender, voice_engine=voice_engine, language=language
+            )
             timing["voice_generation"] = round(time.time() - t0, 2)
             step_status["voice_generation"] = "success"
             print(f"  [OK] {len(audio_files)} audio files created")
@@ -189,7 +194,7 @@ def run_pipeline(
         t0 = time.time()
 
         try:
-            image_files = collect_visuals(script, str(run_dir))
+            image_files = collect_visuals(script, str(run_dir), tone=tone, style=style, aspect_ratio=aspect_ratio)
             timing["visual_collection"] = round(time.time() - t0, 2)
             step_status["visual_collection"] = "success"
             print(f"  [OK] {len(image_files)} images collected")
@@ -203,15 +208,40 @@ def run_pipeline(
         # ---------------------------------------------------------------
         # Step 4: Assemble Video
         # ---------------------------------------------------------------
-        report(4, "Assembling video...")
+        report(4, f"Assembling dynamic video ({style} style)...")
         t0 = time.time()
 
         if audio_files and image_files:
+            # Sort both lists by embedded scene number (scene_01_audio, scene_02_visual, ...)
+            # This guarantees audio[i] and image[i] always correspond to the same scene.
+            import re as _re
+
+            def _scene_num(path: str) -> int:
+                m = _re.search(r"scene_(\d+)", path)
+                return int(m.group(1)) if m else 0
+
+            audio_files = sorted(audio_files, key=_scene_num)
+            image_files = sorted(image_files, key=_scene_num)
+
+            # Trim both to equal length (shorter wins)
+            min_len = min(len(audio_files), len(image_files))
+            if min_len < len(audio_files) or min_len < len(image_files):
+                print(f"  [WARN] audio/image count mismatch ({len(audio_files)}/{len(image_files)}), trimming to {min_len}")
+            audio_files = audio_files[:min_len]
+            image_files = image_files[:min_len]
+
             try:
-                video_path = str(project_dir / "final_video.mp4")
-                result_path = assemble_video(audio_files, image_files, video_path)
+                result_path = assemble_video(
+                    audio_files=audio_files,
+                    image_files=image_files,
+                    output_path=str(project_dir / "final_video.mp4"),
+                    script_data=script,
+                    style=style,
+                    aspect_ratio=aspect_ratio,
+                )
                 video_path = result_path
                 timing["video_assembly"] = round(time.time() - t0, 2)
+
                 step_status["video_assembly"] = "success"
 
                 # Copy preview to project dir if it was created alongside the video
@@ -239,10 +269,23 @@ def run_pipeline(
         t0 = time.time()
 
         try:
-            metadata = generate_metadata(topic, script)
-            timing["metadata_generation"] = round(time.time() - t0, 2)
+            youtube_meta = generate_metadata(topic, script)
+            
+            sys_metadata = {
+                "topic": topic,
+                "status": "success" if not errors else "partial",
+                "timing": timing,
+                "errors": errors,
+                "project_dir": str(project_dir),
+                "timestamp": time.time(),
+                "youtube_metadata": youtube_meta
+            }
             step_status["metadata_generation"] = "success"
-            print(f"  [OK] Metadata generated: {metadata.get('title', 'N/A')}")
+            
+            # Save to MongoDB
+            save_generation(sys_metadata)
+            
+            print(f"  [OK] Metadata generated & saved.")
         except Exception as e:
             timing["metadata_generation"] = round(time.time() - t0, 2)
             step_status["metadata_generation"] = "error"
@@ -284,13 +327,16 @@ def run_pipeline(
             "topic": topic,
             "tone": tone,
             "duration": duration,
+            "style": style,
+            "voice_gender": voice_gender,
+            "voice_engine": voice_engine,
             "timestamp": timestamp,
             "status": overall_status,
             "timing": timing,
             "step_status": step_status,
             "errors": errors,
         },
-        "youtube": metadata,
+        "youtube": youtube_meta if 'youtube_meta' in locals() else {},
         "script_title": script.get("title", ""),
         "scene_count": len(script.get("scenes", [])),
     }
@@ -301,20 +347,19 @@ def run_pipeline(
     except Exception:
         pass
 
-    result = {
+    return {
         "status": overall_status,
-        "video_path": video_path,
-        "metadata": metadata,
+        "video_path": str(video_path) if video_path else None,
+        "metadata": youtube_meta if 'youtube_meta' in locals() else {},
         "script": script,
         "timing": timing,
         "step_status": step_status,
         "errors": errors,
         "error": errors[-1] if overall_status == "error" and errors else "",
         "project_dir": str(project_dir),
+        "aspect_ratio": aspect_ratio,
         "run_dir": str(run_dir),
     }
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +380,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--duration", type=int, default=60, help="Target duration in seconds"
     )
+    parser.add_argument(
+        "--gender", type=str, default="female", choices=["male", "female"], help="Voice gender"
+    )
+    parser.add_argument(
+        "--engine", type=str, default="Edge-TTS (Neural)", help="Voice engine"
+    )
+    parser.add_argument(
+        "--style", type=str, default="Documentary", help="Video style"
+    )
     args = parser.parse_args()
 
-    result = run_pipeline(args.topic, args.tone, args.duration)
+    result = run_pipeline(
+        topic=args.topic,
+        tone=args.tone,
+        duration=args.duration,
+        voice_gender=args.gender,
+        voice_engine=args.engine,
+        style=args.style,
+    )
     print("\n" + json.dumps(result, indent=2))
+
+

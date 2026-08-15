@@ -1,9 +1,16 @@
 {
+    "default_duration_preset": "medium",
     "default_duration": 60,
+    "default_voice_gender": "male",
     "default_tone": "educational",
-    "default_voice": "gTTS (Standard)",
+    "default_voice": "Edge-TTS (Neural)",
     "default_style": "Documentary",
     "output_folder": "D:\\Projects\\YT\\output",
     "enable_n8n": true,
-    "enable_transition_effects": true
+    "enable_transition_effects": true,
+    "enable_motion_effects": true,
+    "enable_text_highlights": true,
+    "enable_subtitles": false,
+    "enable_bg_music": true,
+    "bg_music_volume": 0.12
 }

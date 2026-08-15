@@ -13,7 +13,7 @@ import sys
 from google import genai
 from google.genai import types
 
-from scripts.config import get_gemini_api_key
+from scripts.config import get_gemini_api_keys
 
 # ---------------------------------------------------------------------------
 # Gemini Prompt Template
@@ -97,21 +97,58 @@ def _discover_with_gemini(niche: str) -> list[str]:
     Uses the new google.genai SDK (google-genai package).
     Returns a list of topic strings, or raises an exception on failure.
     """
-    api_key = get_gemini_api_key()
-    client = genai.Client(api_key=api_key)
-
+    api_keys = get_gemini_api_keys()
     prompt = TREND_PROMPT.format(niche=niche)
 
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.9,  # Higher temperature for creative suggestions
-            max_output_tokens=512,
-        ),
-    )
+    MODEL_CHAIN = [
+        "gemini-2.5-flash",       # primary flash model
+        "gemini-2.5-flash-lite",  # light fallback
+        "gemini-3.6-flash",       # fallback
+    ]
 
-    return _parse_gemini_response(response.text)
+    last_error = None
+
+    for key_index, api_key in enumerate(api_keys):
+        client = genai.Client(api_key=api_key)
+        key_label = f"key {key_index + 1}/{len(api_keys)}"
+
+        for model_name in MODEL_CHAIN:
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=0.9,  # Higher temperature for creative suggestions
+                            max_output_tokens=512,
+                        ),
+                    )
+                    return _parse_gemini_response(response.text)
+                except Exception as e:
+                    err_str = str(e)
+                    last_error = e
+
+                    is_quota_error = (
+                        "429" in err_str
+                        or "RESOURCE_EXHAUSTED" in err_str
+                        or "quota" in err_str.lower()
+                    )
+                    is_model_not_found = (
+                        "404" in err_str
+                        or "NOT_FOUND" in err_str
+                        or "not found" in err_str.lower()
+                    )
+
+                    if is_quota_error:
+                        print(f"  [WARN] {model_name} ({key_label}) quota exceeded.", file=sys.stderr)
+                        break  # move to next model
+                    elif is_model_not_found:
+                        break  # move to next model
+                    else:
+                        import time
+                        time.sleep(1) # wait briefly before retry
+
+    raise RuntimeError(f"All Gemini models/keys failed. Last error: {last_error}")
 
 
 def discover_trends(niche: str = "general") -> list[str]:
@@ -134,14 +171,9 @@ def discover_trends(niche: str = "general") -> list[str]:
         topics = _discover_with_gemini(niche_lower)
         print(f"  [OK] Trends generated using Gemini API for niche: {niche_lower}")
         return topics
-    except ValueError:
-        # API key not configured -- fall back silently
-        pass
     except Exception as e:
-        print(f"  [WARN] Gemini trend discovery failed, using fallback: {e}")
-
-    # Fallback to hardcoded topics
-    return SAMPLE_TOPICS.get(niche_lower, SAMPLE_TOPICS["general"])
+        print(f"  [ERROR] Gemini trend discovery failed: {e}")
+        raise e
 
 
 # ---------------------------------------------------------------------------
