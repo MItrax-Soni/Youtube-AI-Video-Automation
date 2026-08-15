@@ -36,34 +36,48 @@ ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# API Keys
+# API Keys & Secrets Accessor Helper
 # ---------------------------------------------------------------------------
+
+def get_env_or_secret(key: str, default: str = "") -> str:
+    """Retrieve config from environment variable, falling back to Streamlit secrets."""
+    val = os.getenv(key, "").strip()
+    if val:
+        return val
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return str(st.secrets[key]).strip()
+    except Exception:
+        pass
+    return default
+
 
 def get_gemini_api_keys() -> list[str]:
     """
     Return all configured Gemini API keys.
 
     Reads GEMINI_API_KEY_1, GEMINI_API_KEY_2 (and optionally more) from
-    the environment. Falls back to the legacy GEMINI_API_KEY if neither
+    the environment or Streamlit secrets. Falls back to the legacy GEMINI_API_KEY if neither
     numbered key is set. At least one valid key must be present.
     """
     keys = []
     # Collect numbered keys (1, 2, … up to 10)
     for i in range(1, 11):
-        k = os.getenv(f"GEMINI_API_KEY_{i}", "").strip()
-        if k and k != "your_gemini_api_key_here":
+        k = get_env_or_secret(f"GEMINI_API_KEY_{i}")
+        if k and k != "your_gemini_api_key_here" and not k.startswith("your_"):
             keys.append(k)
 
     # Legacy fallback
     if not keys:
-        legacy = os.getenv("GEMINI_API_KEY", "").strip()
-        if legacy and legacy != "your_gemini_api_key_here":
+        legacy = get_env_or_secret("GEMINI_API_KEY")
+        if legacy and legacy != "your_gemini_api_key_here" and not legacy.startswith("your_"):
             keys.append(legacy)
 
     if not keys:
         raise ValueError(
             "No Gemini API key found. "
-            "Set GEMINI_API_KEY_1 (and optionally GEMINI_API_KEY_2) in .env."
+            "Set GEMINI_API_KEY_1 (and optionally GEMINI_API_KEY_2) in .env or Streamlit Secrets."
         )
     return keys
 
@@ -74,54 +88,54 @@ def get_gemini_api_key() -> str:
 
 
 def get_pexels_api_key() -> str:
-    """Return the Pexels API key from environment variables."""
-    key = os.getenv("PEXELS_API_KEY", "")
-    if not key or key == "your_pexels_api_key_here":
+    """Return the Pexels API key from environment variables or Streamlit secrets."""
+    key = get_env_or_secret("PEXELS_API_KEY")
+    if not key or key == "your_pexels_api_key_here" or key.startswith("your_"):
         raise ValueError(
             "PEXELS_API_KEY is not set. "
-            "Copy .env.example to .env and add your key."
+            "Configure it in .env or Streamlit Secrets."
         )
     return key
 
 
 def get_n8n_webhook_url() -> str:
     """Return the n8n webhook URL."""
-    return os.getenv(
+    return get_env_or_secret(
         "N8N_WEBHOOK_URL",
         "http://localhost:5678/webhook/youtube-automation",
     )
 
 
 def get_elevenlabs_api_key() -> str:
-    """Return the ElevenLabs API key from environment variables."""
-    key = os.getenv("ELEVENLABS_API_KEY", "")
-    if not key or key == "your_elevenlabs_api_key_here":
+    """Return the ElevenLabs API key from environment variables or Streamlit secrets."""
+    key = get_env_or_secret("ELEVENLABS_API_KEY")
+    if not key or key == "your_elevenlabs_api_key_here" or key.startswith("your_"):
         raise ValueError(
             "ELEVENLABS_API_KEY is not set. "
-            "Add your key to .env."
+            "Configure it in .env or Streamlit Secrets."
         )
     return key
 
 
 def get_pixabay_api_key() -> str:
-    """Return the Pixabay API key from environment variables."""
-    key = os.getenv("PIXABAY_API_KEY", "")
-    if not key or key == "your_pixabay_api_key_here":
+    """Return the Pixabay API key from environment variables or Streamlit secrets."""
+    key = get_env_or_secret("PIXABAY_API_KEY")
+    if not key or key == "your_pixabay_api_key_here" or key.startswith("your_"):
         raise ValueError(
             "PIXABAY_API_KEY is not set. "
-            "Add your key to .env."
+            "Configure it in .env or Streamlit Secrets."
         )
     return key
 
 
 def get_clerk_publishable_key() -> str:
-    """Return the Clerk publishable key from environment variables."""
-    return os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "")
+    """Return the Clerk publishable key from environment variables or Streamlit secrets."""
+    return get_env_or_secret("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY")
 
 
 def get_clerk_secret_key() -> str:
-    """Return the Clerk secret key from environment variables."""
-    return os.getenv("CLERK_SECRET_KEY", "")
+    """Return the Clerk secret key from environment variables or Streamlit secrets."""
+    return get_env_or_secret("CLERK_SECRET_KEY")
 
 
 

@@ -10,7 +10,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ConfigurationError
 
 # Load from config or env
-from scripts.config import PROJECT_ROOT
+from scripts.config import PROJECT_ROOT, get_env_or_secret
 from dotenv import load_dotenv
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -21,8 +21,8 @@ _use_mongo = False
 
 def init_db():
     global _client, _db, _use_mongo
-    uri = os.getenv("MONGODB_URI")
-    if not uri or uri == "your_mongodb_uri_here":
+    uri = get_env_or_secret("MONGODB_URI")
+    if not uri or uri == "your_mongodb_uri_here" or uri.startswith("your_"):
         print("[Database] MONGODB_URI not set. Falling back to local JSON storage.")
         _use_mongo = False
         return False
