@@ -522,24 +522,13 @@ def _generate_with_gemini(topic: str, tone: str, duration: int, language: str = 
 
     last_error = None
 
-    # Timeout wrapper — prevents Gemini API calls from hanging forever
-    # on slow cloud networks (Render free tier).
-    import concurrent.futures
-    API_TIMEOUT = 90  # seconds max per API call
-
-    def _call_gemini(client, model_name, prompt_text):
-        """Call Gemini API — runs inside a thread so we can enforce a timeout."""
-        return client.models.generate_content(
-            model=model_name,
-            contents=prompt_text,
-            config=types.GenerateContentConfig(
-                temperature=0.85,
-                max_output_tokens=8192,
-            ),
-        )
-
     for key_index, api_key in enumerate(api_keys):
-        client = genai.Client(api_key=api_key)
+        # Set a hard HTTP timeout directly on the client —
+        # this is the ONLY reliable way to prevent hanging on slow networks.
+        client = genai.Client(
+            api_key=api_key,
+            http_options={"timeout": 60_000},  # 60 seconds in milliseconds
+        )
         key_label = f"key {key_index + 1}/{len(api_keys)}"
 
         for model_name in MODEL_CHAIN:
@@ -549,10 +538,14 @@ def _generate_with_gemini(topic: str, tone: str, duration: int, language: str = 
                     file=sys.stderr,
                 )
 
-                # Run the API call with a hard timeout
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_call_gemini, client, model_name, prompt)
-                    response = future.result(timeout=API_TIMEOUT)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.85,
+                        max_output_tokens=8192,
+                    ),
+                )
 
                 # Success — parse and validate
                 result = _parse_gemini_response(response.text)
@@ -591,10 +584,10 @@ def _generate_with_gemini(topic: str, tone: str, duration: int, language: str = 
                 )
                 return result
 
-            except concurrent.futures.TimeoutError:
-                last_error = TimeoutError(f"{model_name} timed out after {API_TIMEOUT}s")
+            except (TimeoutError, ConnectionError) as e:
+                last_error = e
                 print(
-                    f"  [WARN] {model_name} ({key_label}) timed out after {API_TIMEOUT}s. "
+                    f"  [WARN] {model_name} ({key_label}) timed out or connection failed. "
                     "Trying next model...",
                     file=sys.stderr,
                 )
