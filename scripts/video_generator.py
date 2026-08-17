@@ -385,7 +385,7 @@ def _concat_with_xfade(
         }
         xfade_name = xfade_map.get(transition_type, "fade")
 
-        BATCH = 8
+        BATCH = 3
         if n > BATCH:
             batch_outputs = []
             batch_durations_out = []
