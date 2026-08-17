@@ -12,6 +12,7 @@ Run with: python -m backend.worker
 
 import sys
 import time
+import threading
 import traceback
 from pathlib import Path
 from datetime import datetime, timezone
@@ -24,7 +25,44 @@ from scripts.database import get_next_queued_job, update_job
 from scripts.config import OUTPUT_DIR
 
 
-POLL_INTERVAL = 3  # seconds between job queue polls
+POLL_INTERVAL = 3   # seconds between job queue polls
+JOB_TIMEOUT = 480   # 8 minutes max per job — kills it if it hangs
+
+
+def _cleanup_zombie_jobs():
+    """
+    Reset any jobs stuck in 'generating_*' or 'assembling_*' status back to failed.
+
+    This happens when the worker process is killed mid-job (e.g. Render deploy swap,
+    OOM kill). Without this, those jobs stay stuck forever because nothing resets them.
+    Called once on worker startup.
+    """
+    try:
+        from scripts.database import _db, _use_mongo
+        if not _use_mongo or _db is None:
+            return
+
+        stuck_statuses = [
+            "generating_script",
+            "generating_voice",
+            "generating_visuals",
+            "assembling_video",
+            "uploading",
+        ]
+        result = _db.video_jobs.update_many(
+            {"status": {"$in": stuck_statuses}},
+            {"$set": {
+                "status": "failed",
+                "progress": 0,
+                "current_step": "Failed (server restarted)",
+                "error": "Job was interrupted by a server restart. Please try again.",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        if result.modified_count > 0:
+            print(f"[Worker] Cleaned up {result.modified_count} zombie job(s) from previous run.")
+    except Exception as e:
+        print(f"[Worker] Zombie cleanup error (non-fatal): {e}")
 
 
 def _progress_callback(job_id: str, step: str, progress: int, detail: str = ""):
@@ -58,66 +96,56 @@ def run_pipeline_for_job(job: dict):
         5: "uploading",
     }
 
-    try:
-        from scripts.pipeline import run_pipeline
+    result_holder = {}
+    error_holder = {}
 
-        # Build the callback matching pipeline's signature: (step, total_steps, message)
-        def on_progress(step: int, total_steps: int, message: str):
-            status = STEP_STATUS_MAP.get(step, f"step_{step}")
-            progress = int((step / total_steps) * 100)
-            _progress_callback(job_id, status, progress, message)
+    def _run():
+        """Run the pipeline in a thread so we can enforce a timeout."""
+        try:
+            from scripts.pipeline import run_pipeline
 
-        # Run the pipeline (it creates its own output directory)
-        result = run_pipeline(
-            topic=params.get("topic", ""),
-            tone=params.get("tone", "educational"),
-            duration=params.get("duration", 60),
-            style=params.get("style", "Documentary"),
-            language=params.get("language", "english"),
-            aspect_ratio=params.get("aspect_ratio", "16:9"),
-            voice_gender=params.get("voice_gender", "female"),
-            voice_engine=params.get("voice_engine", "Edge-TTS (Neural)"),
-            progress_callback=on_progress,
-        )
+            # Build the callback matching pipeline's signature: (step, total_steps, message)
+            def on_progress(step: int, total_steps: int, message: str):
+                status = STEP_STATUS_MAP.get(step, f"step_{step}")
+                progress = int((step / total_steps) * 100)
+                _progress_callback(job_id, status, progress, message)
 
-        # Determine final status from result
-        status = result.get("status", "unknown")
-        video_path = result.get("video_path", "")
+            # Run the pipeline (it creates its own output directory)
+            result = run_pipeline(
+                topic=params.get("topic", ""),
+                tone=params.get("tone", "educational"),
+                duration=params.get("duration", 60),
+                style=params.get("style", "Documentary"),
+                language=params.get("language", "english"),
+                aspect_ratio=params.get("aspect_ratio", "16:9"),
+                voice_gender=params.get("voice_gender", "female"),
+                voice_engine=params.get("voice_engine", "Edge-TTS (Neural)"),
+                progress_callback=on_progress,
+            )
+            result_holder["result"] = result
+        except Exception as e:
+            error_holder["error"] = e
+            traceback.print_exc()
 
-        if status == "success" and video_path:
-            update_job(job_id, {
-                "status": "completed",
-                "progress": 100,
-                "current_step": "Complete",
-                "video_url": video_path,
-                "video_title": result.get("title", params.get("topic", "")),
-                "metadata": {
-                    "scene_count": result.get("scene_count", 0),
-                    "project_dir": result.get("project_dir", ""),
-                },
-                "timing": result.get("timing", {}),
-            })
-            print(f"[Worker] ✅ Job {job_id} completed successfully!")
-        else:
-            errors = result.get("errors", [])
-            update_job(job_id, {
-                "status": "failed" if not video_path else "completed",
-                "progress": 100 if video_path else 0,
-                "current_step": "Complete" if video_path else "Failed",
-                "video_url": video_path if video_path else None,
-                "video_title": result.get("title", ""),
-                "error": "; ".join(errors) if errors else None,
-                "timing": result.get("timing", {}),
-            })
-            if video_path:
-                print(f"[Worker] ⚠️  Job {job_id} completed with warnings")
-            else:
-                print(f"[Worker] ❌ Job {job_id} failed: {errors}")
+    # Run pipeline in a thread with a hard timeout
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=JOB_TIMEOUT)
 
-    except Exception as e:
+    if thread.is_alive():
+        # Job exceeded the timeout — mark as failed
+        print(f"[Worker] ⏰ Job {job_id} timed out after {JOB_TIMEOUT}s!")
+        update_job(job_id, {
+            "status": "failed",
+            "progress": 0,
+            "current_step": "Failed (timed out)",
+            "error": f"Job exceeded the {JOB_TIMEOUT}s time limit. The server may be under heavy load.",
+        })
+        return
+
+    if "error" in error_holder:
+        e = error_holder["error"]
         error_msg = f"{type(e).__name__}: {str(e)}"
-        traceback.print_exc()
-
         update_job(job_id, {
             "status": "failed",
             "progress": 0,
@@ -125,8 +153,53 @@ def run_pipeline_for_job(job: dict):
             "error": error_msg,
             "failed_step": job.get("status", "unknown"),
         })
-
         print(f"[Worker] ❌ Job {job_id} failed: {error_msg}")
+        return
+
+    if "result" not in result_holder:
+        update_job(job_id, {
+            "status": "failed",
+            "progress": 0,
+            "current_step": "Failed",
+            "error": "Pipeline returned no result",
+        })
+        return
+
+    result = result_holder["result"]
+
+    # Determine final status from result
+    status = result.get("status", "unknown")
+    video_path = result.get("video_path", "")
+
+    if status == "success" and video_path:
+        update_job(job_id, {
+            "status": "completed",
+            "progress": 100,
+            "current_step": "Complete",
+            "video_url": video_path,
+            "video_title": result.get("title", params.get("topic", "")),
+            "metadata": {
+                "scene_count": result.get("scene_count", 0),
+                "project_dir": result.get("project_dir", ""),
+            },
+            "timing": result.get("timing", {}),
+        })
+        print(f"[Worker] ✅ Job {job_id} completed successfully!")
+    else:
+        errors = result.get("errors", [])
+        update_job(job_id, {
+            "status": "failed" if not video_path else "completed",
+            "progress": 100 if video_path else 0,
+            "current_step": "Complete" if video_path else "Failed",
+            "video_url": video_path if video_path else None,
+            "video_title": result.get("title", ""),
+            "error": "; ".join(errors) if errors else None,
+            "timing": result.get("timing", {}),
+        })
+        if video_path:
+            print(f"[Worker] ⚠️  Job {job_id} completed with warnings")
+        else:
+            print(f"[Worker] ❌ Job {job_id} failed: {errors}")
 
 
 def main():
@@ -135,7 +208,11 @@ def main():
     print("MAiX-YT Studio Worker — Starting")
     print(f"Output directory: {OUTPUT_DIR}")
     print(f"Poll interval: {POLL_INTERVAL}s")
+    print(f"Job timeout: {JOB_TIMEOUT}s")
     print("=" * 60)
+
+    # Clean up zombie jobs from previous crashed runs
+    _cleanup_zombie_jobs()
 
     while True:
         try:

@@ -522,96 +522,121 @@ def _generate_with_gemini(topic: str, tone: str, duration: int, language: str = 
 
     last_error = None
 
+    # Timeout wrapper — prevents Gemini API calls from hanging forever
+    # on slow cloud networks (Render free tier).
+    import concurrent.futures
+    API_TIMEOUT = 90  # seconds max per API call
+
+    def _call_gemini(client, model_name, prompt_text):
+        """Call Gemini API — runs inside a thread so we can enforce a timeout."""
+        return client.models.generate_content(
+            model=model_name,
+            contents=prompt_text,
+            config=types.GenerateContentConfig(
+                temperature=0.85,
+                max_output_tokens=8192,
+            ),
+        )
+
     for key_index, api_key in enumerate(api_keys):
         client = genai.Client(api_key=api_key)
         key_label = f"key {key_index + 1}/{len(api_keys)}"
 
         for model_name in MODEL_CHAIN:
-            # Retry up to 2 times per model before switching
-            for attempt in range(2):
-                try:
+            try:
+                print(
+                    f"  [INFO] Trying model: {model_name} ({key_label})",
+                    file=sys.stderr,
+                )
+
+                # Run the API call with a hard timeout
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call_gemini, client, model_name, prompt)
+                    response = future.result(timeout=API_TIMEOUT)
+
+                # Success — parse and validate
+                result = _parse_gemini_response(response.text)
+
+                # Validate required top-level structure
+                if "scenes" not in result:
+                    raise ValueError("Gemini response missing 'scenes' key")
+                if not isinstance(result["scenes"], list) or len(result["scenes"]) == 0:
+                    raise ValueError("Gemini returned an empty scenes list")
+
+                # Normalize each scene — ensure all expected fields exist
+                total_duration = 0
+                for i, scene in enumerate(result["scenes"]):
+                    scene.setdefault("scene_number", i + 1)
+                    scene.setdefault("duration_seconds", max(2, duration // len(result["scenes"])))
+                    scene.setdefault("objective", "")
+                    scene.setdefault("transition", "")
+                    scene.setdefault("scene_type", "main_content")
+                    total_duration += scene["duration_seconds"]
+
+                # Normalize scene durations to match requested total (±10s tolerance)
+                if total_duration > 0 and abs(total_duration - duration) > 10:
+                    scale = duration / total_duration
+                    for scene in result["scenes"]:
+                        scene["duration_seconds"] = max(2, round(scene["duration_seconds"] * scale))
+
+                # Normalize top-level metadata fields
+                result.setdefault("title", topic)
+                result.setdefault("summary", "")
+                result.setdefault("storytelling_style", "")
+                result.setdefault("estimated_duration_seconds", duration)
+
+                print(
+                    f"  [OK] Script generated via {model_name} ({key_label}, {len(result['scenes'])} scenes)",
+                    file=sys.stderr,
+                )
+                return result
+
+            except concurrent.futures.TimeoutError:
+                last_error = TimeoutError(f"{model_name} timed out after {API_TIMEOUT}s")
+                print(
+                    f"  [WARN] {model_name} ({key_label}) timed out after {API_TIMEOUT}s. "
+                    "Trying next model...",
+                    file=sys.stderr,
+                )
+                continue  # try next model
+
+            except Exception as e:
+                err_str = str(e)
+                last_error = e
+
+                # Check for quota-exhausted (429) error
+                is_quota_error = (
+                    "429" in err_str
+                    or "RESOURCE_EXHAUSTED" in err_str
+                    or "quota" in err_str.lower()
+                )
+                is_model_not_found = (
+                    "404" in err_str
+                    or "NOT_FOUND" in err_str
+                    or "not found" in err_str.lower()
+                )
+
+                if is_quota_error:
                     print(
-                        f"  [INFO] Trying model: {model_name} ({key_label}, attempt {attempt + 1})",
+                        f"  [WARN] {model_name} ({key_label}) quota exceeded. "
+                        "Trying next available model/key...",
                         file=sys.stderr,
                     )
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=0.85,
-                            max_output_tokens=8192,
-                        ),
-                    )
-                    # Success — parse and validate
-                    result = _parse_gemini_response(response.text)
-
-                    # Validate required top-level structure
-                    if "scenes" not in result:
-                        raise ValueError("Gemini response missing 'scenes' key")
-                    if not isinstance(result["scenes"], list) or len(result["scenes"]) == 0:
-                        raise ValueError("Gemini returned an empty scenes list")
-
-                    # Normalize each scene — ensure all expected fields exist
-                    total_duration = 0
-                    for i, scene in enumerate(result["scenes"]):
-                        scene.setdefault("scene_number", i + 1)
-                        scene.setdefault("duration_seconds", max(2, duration // len(result["scenes"])))
-                        scene.setdefault("objective", "")
-                        scene.setdefault("transition", "")
-                        scene.setdefault("scene_type", "main_content")
-                        total_duration += scene["duration_seconds"]
-
-                    # Normalize scene durations to match requested total (±10s tolerance)
-                    if total_duration > 0 and abs(total_duration - duration) > 10:
-                        scale = duration / total_duration
-                        for scene in result["scenes"]:
-                            scene["duration_seconds"] = max(2, round(scene["duration_seconds"] * scale))
-
-                    # Normalize top-level metadata fields
-                    result.setdefault("title", topic)
-                    result.setdefault("summary", "")
-                    result.setdefault("storytelling_style", "")
-                    result.setdefault("estimated_duration_seconds", duration)
-
+                    continue  # try next model
+                elif is_model_not_found:
                     print(
-                        f"  [OK] Script generated via {model_name} ({key_label}, {len(result['scenes'])} scenes)",
+                        f"  [WARN] {model_name} ({key_label}) is unavailable. "
+                        "Trying next model...",
                         file=sys.stderr,
                     )
-                    return result
-
-                except Exception as e:
-                    err_str = str(e)
-                    last_error = e
-
-                    # Check for quota-exhausted (429) error
-                    is_quota_error = (
-                        "429" in err_str
-                        or "RESOURCE_EXHAUSTED" in err_str
-                        or "quota" in err_str.lower()
+                    continue  # try next model
+                else:
+                    print(
+                        f"  [WARN] {model_name} ({key_label}) error: {err_str[:100]}. "
+                        "Trying next model...",
+                        file=sys.stderr,
                     )
-                    is_model_not_found = (
-                        "404" in err_str
-                        or "NOT_FOUND" in err_str
-                        or "not found" in err_str.lower()
-                    )
-
-                    if is_quota_error:
-                        print(
-                            f"  [WARN] {model_name} ({key_label}) quota exceeded. "
-                            "Trying next available model/key...",
-                            file=sys.stderr,
-                        )
-                        break  # break retry loop, continue to next model
-                    elif is_model_not_found:
-                        print(
-                            f"  [WARN] {model_name} ({key_label}) is unavailable. "
-                            "Trying next model...",
-                            file=sys.stderr,
-                        )
-                        break  # break retry loop, continue to next model
-                    else:
-                        # Non-quota error (bad JSON, invalid key, etc.) — raise immediately
-                        raise
+                    continue  # try next model instead of crashing
 
         # All models for this key exhausted — try next key
         if key_index < len(api_keys) - 1:

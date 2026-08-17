@@ -29,9 +29,16 @@ from PIL import Image
 from scripts.config import (
     ASSETS_DIR,
     OUTPUT_DIR,
+    IS_RENDER,
+    IS_CLOUD,
     SettingsManager,
     get_style_profile,
 )
+
+# On Render free tier (512MB RAM), heavy FFmpeg filters cause OOM kills.
+# We detect this and automatically simplify the pipeline.
+_CLOUD_MODE = IS_RENDER or IS_CLOUD
+FFMPEG_TIMEOUT = 120  # seconds max per FFmpeg call
 
 
 def _get_ffmpeg_exe() -> str:
@@ -455,11 +462,20 @@ def assemble_video(
     settings = SettingsManager.load()
     style_profile = get_style_profile(style)
 
-    enable_motion = settings.get("enable_motion_effects", True)
-    enable_highlights = False  # Disabled: keyword highlight overlays removed
-    enable_subtitles = settings.get("enable_subtitles", False)
-    enable_transitions = settings.get("enable_transition_effects", True)
-    enable_bg_music = settings.get("enable_bg_music", True)
+    # On cloud (Render 512MB RAM): force-disable heavy features to prevent OOM
+    if _CLOUD_MODE:
+        print("  [INFO] Cloud mode detected — using lightweight FFmpeg pipeline (720p, no motion, no xfade)")
+        enable_motion = False
+        enable_highlights = False
+        enable_subtitles = False
+        enable_transitions = False
+        enable_bg_music = False
+    else:
+        enable_motion = settings.get("enable_motion_effects", True)
+        enable_highlights = False
+        enable_subtitles = settings.get("enable_subtitles", False)
+        enable_transitions = settings.get("enable_transition_effects", True)
+        enable_bg_music = settings.get("enable_bg_music", True)
     bg_music_vol = float(settings.get("bg_music_volume", 0.10))
 
     ffmpeg_exe = _get_ffmpeg_exe()
@@ -476,11 +492,17 @@ def assemble_video(
     scene_clips = []
     clip_durations = []
 
-    # Determine resolution based on aspect ratio
-    if aspect_ratio == "9:16":
-        vid_w, vid_h = 1080, 1920
+    # Determine resolution — on cloud use 720p to halve RAM usage
+    if _CLOUD_MODE:
+        if aspect_ratio == "9:16":
+            vid_w, vid_h = 720, 1280
+        else:
+            vid_w, vid_h = 1280, 720
     else:
-        vid_w, vid_h = 1920, 1080
+        if aspect_ratio == "9:16":
+            vid_w, vid_h = 1080, 1920
+        else:
+            vid_w, vid_h = 1920, 1080
 
     # 1. Build individual scene video clips with Motion + Text Highlights + Subtitles + Audio Sync
     for i, (img_path, aud_path) in enumerate(zip(image_files, audio_files)):
@@ -534,7 +556,7 @@ def assemble_video(
 
         rendered_success = False
         try:
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=FFMPEG_TIMEOUT)
             scene_clips.append(str(clip_path))
             rendered_success = True
             print(f"  [OK] Rendered dynamic scene clip {i+1}/{len(image_files)}: {clip_path.name} ({motion_type}, {aud_duration}s)")
@@ -562,7 +584,7 @@ def assemble_video(
                 str(clip_path),
             ]
             try:
-                subprocess.run(fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                subprocess.run(fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=FFMPEG_TIMEOUT)
                 scene_clips.append(str(clip_path))
                 print(f"  [OK] Rendered fallback clip {i+1}/{len(image_files)}: {clip_path.name}")
             except subprocess.CalledProcessError as e:
@@ -599,7 +621,7 @@ def assemble_video(
             str(raw_video_path),
         ]
         try:
-            subprocess.run(concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            subprocess.run(concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=FFMPEG_TIMEOUT)
             print(f"  [OK] Scene clips concatenated (plain cut): {raw_video_path.name}")
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr.decode("utf-8", errors="ignore")
@@ -608,7 +630,7 @@ def assemble_video(
                 ffmpeg_exe, "-y", "-f", "concat", "-safe", "0",
                 "-i", str(concat_list_path), "-c", "copy", str(raw_video_path)
             ]
-            subprocess.run(copy_concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            subprocess.run(copy_concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=FFMPEG_TIMEOUT)
             print(f"  [OK] Scene clips concatenated via stream copy: {raw_video_path.name}")
 
     # Apply overall Video Fade In at beginning (1.0s) & Fade Out at end (1.0s)
@@ -623,14 +645,14 @@ def assemble_video(
         "-i", str(raw_video_path),
         "-vf", fade_vf,
         "-c:v", "libx264",
-        "-preset", "fast",
+        "-preset", "ultrafast",
         "-c:a", "copy",
         str(faded_video_path),
     ]
     
     video_to_mix = raw_video_path
     try:
-        res = subprocess.run(fade_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        res = subprocess.run(fade_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=FFMPEG_TIMEOUT)
         if res.returncode == 0 and faded_video_path.exists():
             video_to_mix = faded_video_path
             print(f"  [OK] Applied fade-in (1s) and fade-out (1s) at {fade_out_start:.2f}s")
