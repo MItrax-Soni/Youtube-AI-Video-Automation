@@ -19,12 +19,18 @@ load_dotenv(PROJECT_ROOT / ".env")
 # Cloud Environment Detection
 # ---------------------------------------------------------------------------
 IS_CLOUD = bool(os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("STREAMLIT_CLOUD"))
+IS_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT"))
+IS_RENDER = bool(os.getenv("RENDER"))
 
 # ---------------------------------------------------------------------------
 # Directory Paths
-# On Streamlit Cloud the project directory is read-only; use /tmp/ instead.
+# On Railway, use persistent volume at /data/ for output, /tmp/ for assets.
+# On Render (Free), persistent disks aren't available, so use /tmp/
 # ---------------------------------------------------------------------------
-if IS_CLOUD:
+if IS_RAILWAY:
+    ASSETS_DIR = Path("/tmp/maix_assets")
+    OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/data/videos"))
+elif IS_RENDER or IS_CLOUD:
     ASSETS_DIR = Path("/tmp/maix_assets")
     OUTPUT_DIR = Path("/tmp/maix_output")
 else:
