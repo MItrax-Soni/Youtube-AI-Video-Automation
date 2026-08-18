@@ -233,3 +233,68 @@ def save_user_settings(user_id: str, settings: dict) -> bool:
         print(f"[Database] Error saving settings for {user_id}: {e}")
         return False
 
+
+# ---------------------------------------------------------------------------
+# OAuth Tokens Collection — Per-User OAuth Tokens (Google Drive, etc.)
+# ---------------------------------------------------------------------------
+
+def save_user_oauth_tokens(user_id: str, provider: str, token_data: dict) -> bool:
+    """
+    Save OAuth tokens for a user and provider.
+
+    Args:
+        user_id: Clerk user ID.
+        provider: e.g. "google_drive".
+        token_data: Dict with access_token, refresh_token, etc.
+    """
+    if not _use_mongo or _db is None:
+        return False
+    try:
+        from datetime import datetime, timezone
+        doc = {
+            "user_id": user_id,
+            "provider": provider,
+            "tokens": token_data,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _db.oauth_tokens.update_one(
+            {"user_id": user_id, "provider": provider},
+            {"$set": doc},
+            upsert=True,
+        )
+        return True
+    except Exception as e:
+        print(f"[Database] Error saving OAuth tokens for {user_id}/{provider}: {e}")
+        return False
+
+
+def get_user_oauth_tokens(user_id: str, provider: str) -> dict | None:
+    """
+    Retrieve stored OAuth tokens for a user and provider.
+
+    Returns the token_data dict, or None if not found.
+    """
+    if not _use_mongo or _db is None:
+        return None
+    try:
+        doc = _db.oauth_tokens.find_one(
+            {"user_id": user_id, "provider": provider}
+        )
+        if doc:
+            return doc.get("tokens")
+        return None
+    except Exception as e:
+        print(f"[Database] Error fetching OAuth tokens for {user_id}/{provider}: {e}")
+        return None
+
+
+def delete_user_oauth_tokens(user_id: str, provider: str) -> bool:
+    """Remove OAuth tokens for a user and provider."""
+    if not _use_mongo or _db is None:
+        return False
+    try:
+        _db.oauth_tokens.delete_one({"user_id": user_id, "provider": provider})
+        return True
+    except Exception as e:
+        print(f"[Database] Error deleting OAuth tokens for {user_id}/{provider}: {e}")
+        return False

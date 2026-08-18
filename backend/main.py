@@ -63,6 +63,8 @@ from backend.routes.history import router as history_router
 from backend.routes.settings import router as settings_router
 from backend.routes.trends import router as trends_router
 from backend.routes.health import router as health_router
+from backend.routes.drive import router as drive_router
+from backend.routes.stats import router as stats_router
 from fastapi.staticfiles import StaticFiles
 from scripts.config import OUTPUT_DIR
 
@@ -74,6 +76,8 @@ app.include_router(history_router)
 app.include_router(settings_router)
 app.include_router(trends_router)
 app.include_router(health_router)
+app.include_router(drive_router)
+app.include_router(stats_router)
 
 
 # ---------------------------------------------------------------------------

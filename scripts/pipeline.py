@@ -277,6 +277,7 @@ def run_pipeline(
                 "timing": timing,
                 "errors": errors,
                 "project_dir": str(project_dir),
+                "video_path": str(video_path) if video_path else None,
                 "timestamp": time.time(),
                 "youtube_metadata": youtube_meta
             }
@@ -350,6 +351,8 @@ def run_pipeline(
     return {
         "status": overall_status,
         "video_path": str(video_path) if video_path else None,
+        "title": script.get("title", ""),
+        "scene_count": len(script.get("scenes", [])),
         "metadata": youtube_meta if 'youtube_meta' in locals() else {},
         "script": script,
         "timing": timing,

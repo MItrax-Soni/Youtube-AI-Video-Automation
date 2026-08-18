@@ -84,6 +84,30 @@ export async function getHistory(
 }
 
 // ---------------------------------------------------------------------------
+// Stats (Dashboard)
+// ---------------------------------------------------------------------------
+
+export interface StatsResponse {
+  total_videos: number;
+  unique_topics: number;
+  today_count: number;
+  avg_time: string;
+  success_rate: string;
+  recent: {
+    job_id: string;
+    title: string;
+    status: string;
+    created_at: string;
+    timing: Record<string, number>;
+  }[];
+}
+
+export async function getStats(token: string): Promise<StatsResponse> {
+  const res = await fetchWithAuth("/api/stats", {}, token);
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Trends
 // ---------------------------------------------------------------------------
 
@@ -162,3 +186,53 @@ export function getVideoUrl(jobId: string): string {
 export function getThumbnailUrl(jobId: string): string {
   return `${BACKEND_URL}/api/videos/${jobId}/thumbnail.jpg`;
 }
+
+/**
+ * Build a full video URL from the video_url stored in the job document.
+ *
+ * The worker stores either:
+ *   - A relative path like "/api/videos/video_20260818/final_video.mp4"
+ *   - An absolute URL like "https://drive.google.com/..." (future Google Drive)
+ *
+ * For relative paths, we prepend BACKEND_URL.
+ * For absolute URLs, we return them as-is.
+ */
+export function getFullVideoUrl(videoUrl: string): string {
+  if (!videoUrl) return "";
+  // Already a full URL (https:// or http://)
+  if (videoUrl.startsWith("http://") || videoUrl.startsWith("https://")) {
+    return videoUrl;
+  }
+  // Relative path — prepend backend URL
+  return `${BACKEND_URL}${videoUrl}`;
+}
+
+// ---------------------------------------------------------------------------
+// Google Drive
+// ---------------------------------------------------------------------------
+
+export async function getDriveStatus(token: string): Promise<{
+  configured: boolean;
+  connected: boolean;
+  email?: string;
+  display_name?: string;
+  message?: string;
+}> {
+  const res = await fetchWithAuth("/api/drive/status", {}, token);
+  return res.json();
+}
+
+export async function getDriveAuthUrl(token: string): Promise<{ auth_url: string }> {
+  const res = await fetchWithAuth("/api/drive/auth-url", {}, token);
+  return res.json();
+}
+
+export async function disconnectDrive(token: string): Promise<{ status: string }> {
+  const res = await fetchWithAuth(
+    "/api/drive/disconnect",
+    { method: "POST" },
+    token
+  );
+  return res.json();
+}
+

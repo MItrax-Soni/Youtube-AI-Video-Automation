@@ -1,7 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { useAuth } from "@clerk/nextjs";
 import { motion } from "framer-motion";
 import {
   Video,
@@ -14,6 +15,8 @@ import {
 import Sidebar from "@/components/Sidebar";
 import NeonBackground from "@/components/NeonBackground";
 import StatsCard from "@/components/StatsCard";
+import { getStats } from "@/lib/api";
+import type { StatsResponse } from "@/lib/api";
 
 const QUICK_ACTIONS = [
   {
@@ -70,13 +73,51 @@ const fadeUp = {
 };
 
 export default function DashboardPage() {
-  // TODO: Fetch real stats from backend in Phase 2
-  const stats = {
+  const { getToken } = useAuth();
+  const [stats, setStats] = useState({
     totalVideos: 0,
     uniqueTopics: 0,
     todayCount: 0,
-    avgTime: "—",
-    successRate: "—",
+    avgTime: "—" as string | number,
+    successRate: "—" as string | number,
+  });
+  const [recent, setRecent] = useState<StatsResponse["recent"]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const data = await getStats(token);
+        setStats({
+          totalVideos: data.total_videos,
+          uniqueTopics: data.unique_topics,
+          todayCount: data.today_count,
+          avgTime: data.avg_time,
+          successRate: data.success_rate,
+        });
+        setRecent(data.recent || []);
+      } catch (err) {
+        console.error("Failed to fetch stats:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchStats();
+  }, [getToken]);
+
+  const formatDate = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return iso;
+    }
   };
 
   return (
@@ -185,13 +226,48 @@ export default function DashboardPage() {
 
               {/* Recent Activity */}
               <div className="section-title">📜 Recent Activity</div>
-              <div className="empty-state" style={{ padding: "2rem" }}>
-                <h3>No videos generated yet</h3>
-                <p>
-                  Use <strong>Generate Video</strong> to create your first
-                  AI-powered video!
-                </p>
-              </div>
+              {loading ? (
+                <div className="empty-state" style={{ padding: "2rem" }}>
+                  <p style={{ color: "var(--text-secondary)" }}>Loading activity...</p>
+                </div>
+              ) : recent.length === 0 ? (
+                <div className="empty-state" style={{ padding: "2rem" }}>
+                  <h3>No videos generated yet</h3>
+                  <p>
+                    Use <strong>Generate Video</strong> to create your first
+                    AI-powered video!
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {recent.map((entry) => {
+                    const totalTime = Object.values(entry.timing).reduce((a, b) => a + b, 0);
+                    return (
+                      <motion.div
+                        key={entry.job_id}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className="glass-card"
+                        style={{ padding: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "0.95rem" }}>
+                            {entry.title}
+                          </div>
+                          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: "4px" }}>
+                            🕐 {formatDate(entry.created_at)} &nbsp;·&nbsp;
+                            ⏱ {totalTime.toFixed(0)}s
+                          </div>
+                        </div>
+                        <span className="status-badge badge-success" style={{ fontSize: "0.7rem" }}>
+                          {entry.status.toUpperCase()}
+                        </span>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Right Column */}

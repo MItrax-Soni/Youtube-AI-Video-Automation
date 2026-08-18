@@ -6,7 +6,7 @@ import Sidebar from "@/components/Sidebar";
 import NeonBackground from "@/components/NeonBackground";
 import GlassCard from "@/components/GlassCard";
 import ProgressTracker from "@/components/ProgressTracker";
-import { startGeneration, getJobStatus } from "@/lib/api";
+import { startGeneration, getJobStatus, getFullVideoUrl } from "@/lib/api";
 import type { Job, JobStatus } from "@/lib/types";
 
 const TONES = [
@@ -309,7 +309,7 @@ export default function GeneratePage() {
                           style={{ width: "100%", borderRadius: "var(--radius-lg)" }}
                         >
                           <source
-                            src={currentJob.video_url}
+                            src={getFullVideoUrl(currentJob.video_url!)}
                             type="video/mp4"
                           />
                         </video>

@@ -5,7 +5,7 @@ import { useAuth } from "@clerk/nextjs";
 import Sidebar from "@/components/Sidebar";
 import NeonBackground from "@/components/NeonBackground";
 import GlassCard from "@/components/GlassCard";
-import { getSettings, updateSettings } from "@/lib/api";
+import { getSettings, updateSettings, getDriveStatus, getDriveAuthUrl, disconnectDrive } from "@/lib/api";
 import type { UserSettings } from "@/lib/types";
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -27,19 +27,31 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  
+  // Google Drive State
+  const [driveStatus, setDriveStatus] = useState<any>(null);
+  const [loadingDrive, setLoadingDrive] = useState(true);
 
   useEffect(() => {
-    async function fetchSettings() {
+    async function fetchData() {
       try {
         const token = await getToken();
         if (!token) return;
+        
+        // Fetch settings
         const data = await getSettings(token);
         setSettings(data.settings);
+        
+        // Fetch drive status
+        const driveData = await getDriveStatus(token);
+        setDriveStatus(driveData);
       } catch (err) {
-        console.error("Failed to fetch settings:", err);
+        console.error("Failed to fetch settings data:", err);
+      } finally {
+        setLoadingDrive(false);
       }
     }
-    fetchSettings();
+    fetchData();
   }, [getToken]);
 
   const handleSave = async () => {
@@ -55,6 +67,34 @@ export default function SettingsPage() {
       console.error("Failed to save settings:", err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleConnectDrive = async () => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await getDriveAuthUrl(token);
+      if (res.auth_url) {
+        window.location.href = res.auth_url;
+      }
+    } catch (err) {
+      console.error("Failed to get drive auth url:", err);
+      alert("Failed to start Google Drive connection.");
+    }
+  };
+
+  const handleDisconnectDrive = async () => {
+    try {
+      setLoadingDrive(true);
+      const token = await getToken();
+      if (!token) return;
+      await disconnectDrive(token);
+      setDriveStatus({ ...driveStatus, connected: false });
+    } catch (err) {
+      console.error("Failed to disconnect drive:", err);
+    } finally {
+      setLoadingDrive(false);
     }
   };
 
@@ -164,6 +204,49 @@ export default function SettingsPage() {
                     onChange={(e) => updateField("bg_music_volume", Number(e.target.value))}
                     style={{ width: "100%", accentColor: "var(--neon-purple)" }}
                   />
+                </div>
+              )}
+            </GlassCard>
+          </div>
+
+          <div style={{ marginTop: "1.5rem" }}>
+            <GlassCard>
+              <h3>Integrations</h3>
+              
+              <div style={{ marginTop: "1rem", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem", backgroundColor: "rgba(255,255,255,0.02)", borderRadius: "var(--radius-md)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                <div>
+                  <h4 style={{ margin: "0 0 0.5rem 0", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    Google Drive
+                    {driveStatus?.connected && <span className="status-badge badge-success" style={{ fontSize: "0.7rem", padding: "2px 6px" }}>Connected</span>}
+                  </h4>
+                  <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--text-secondary)" }}>
+                    Automatically upload generated videos to a "MAiX-YT" folder in your Drive.
+                  </p>
+                  {driveStatus?.connected && driveStatus?.email && (
+                    <p style={{ margin: "0.5rem 0 0 0", fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                      Connected as: <strong>{driveStatus.email}</strong>
+                    </p>
+                  )}
+                </div>
+                
+                <div>
+                  {loadingDrive ? (
+                    <button className="btn-secondary" disabled>Loading...</button>
+                  ) : driveStatus?.connected ? (
+                    <button className="btn-secondary" onClick={handleDisconnectDrive} style={{ border: "1px solid rgba(255,100,100,0.3)", color: "#ff8888" }}>
+                      Disconnect
+                    </button>
+                  ) : (
+                    <button className="btn-primary" onClick={handleConnectDrive}>
+                      Connect Google Drive
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              {!driveStatus?.configured && !loadingDrive && (
+                <div style={{ marginTop: "1rem", padding: "0.75rem", backgroundColor: "rgba(255, 100, 100, 0.1)", color: "#ff8888", borderRadius: "var(--radius-sm)", fontSize: "0.85rem" }}>
+                  ⚠️ Google Drive API is not configured on the server. Please check the setup guide.
                 </div>
               )}
             </GlassCard>
