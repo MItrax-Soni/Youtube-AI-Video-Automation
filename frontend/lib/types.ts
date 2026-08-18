@@ -62,6 +62,8 @@ export interface HistoryEntry {
   video_url: string | null;
   thumbnail_url: string | null;
   timing: Record<string, number>;
+  params: GenerateParams;
+  metadata: Record<string, any>;
   errors: string[];
   youtube_meta: Record<string, unknown>;
 }

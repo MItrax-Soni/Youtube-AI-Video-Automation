@@ -36,6 +36,8 @@ async def get_history(user_id: str = Depends(get_current_user)):
             "video_url": job.get("video_url"),
             "thumbnail_url": job.get("thumbnail_url"),
             "timing": job.get("timing", {}),
+            "params": job.get("params", {}),
+            "metadata": job.get("metadata", {}),
             "errors": [job["error"]] if job.get("error") else [],
             "failed_step": job.get("failed_step"),
         })

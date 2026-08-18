@@ -39,6 +39,8 @@ const DURATIONS = [
 
 const LANGUAGES = ["English", "Hindi", "Gujarati"];
 const ASPECT_RATIOS = ["16:9", "9:16"];
+const VOICE_GENDERS = ["Female", "Male"];
+const VOICE_ENGINES = ["Edge-TTS (Neural)", "ElevenLabs (Premium)", "gTTS (Standard)"];
 
 export default function GeneratePage() {
   const { getToken } = useAuth();
@@ -50,6 +52,8 @@ export default function GeneratePage() {
   const [duration, setDuration] = useState(60);
   const [language, setLanguage] = useState("English");
   const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [voiceGender, setVoiceGender] = useState("Female");
+  const [voiceEngine, setVoiceEngine] = useState("Edge-TTS (Neural)");
 
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -111,8 +115,8 @@ export default function GeneratePage() {
           topic: topic.trim(),
           tone: tone.toLowerCase(),
           duration,
-          voice_gender: "female",
-          voice_engine: "Edge-TTS (Neural)",
+          voice_gender: voiceGender.toLowerCase(),
+          voice_engine: voiceEngine,
           style,
           language: language.toLowerCase(),
           aspect_ratio: aspectRatio,
@@ -248,13 +252,46 @@ export default function GeneratePage() {
                       onChange={(e) => setAspectRatio(e.target.value)}
                       disabled={isGenerating}
                     >
-                      {ASPECT_RATIOS.map((ar) => (
-                        <option key={ar} value={ar}>
-                          {ar}
+                      {ASPECT_RATIOS.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
                         </option>
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label className="input-label">Voice Gender</label>
+                    <select
+                      className="select-field"
+                      value={voiceGender}
+                      onChange={(e) => setVoiceGender(e.target.value)}
+                      disabled={isGenerating}
+                    >
+                      {VOICE_GENDERS.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="input-label">Voice Engine</label>
+                    <select
+                      className="select-field"
+                      value={voiceEngine}
+                      onChange={(e) => setVoiceEngine(e.target.value)}
+                      disabled={isGenerating}
+                    >
+                      {VOICE_ENGINES.map((e) => (
+                        <option key={e} value={e}>
+                          {e}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                 </div>
 
                 {/* Generate Button */}
